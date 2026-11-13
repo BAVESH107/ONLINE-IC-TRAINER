@@ -17,6 +17,7 @@
     <aside class="sidebar">
         <h2>Component Tray</h2>
         <p class="hint">Drag IC to slot.<br><strong>Double-click IC/wire to remove.</strong></p>
+        
         <div class="ic-palette">
             <div class="ic-drag" draggable="true" ondragstart="dragIC(event)" data-type="7408">7408 &nbsp;—&nbsp; AND</div>
             <div class="ic-drag" draggable="true" ondragstart="dragIC(event)" data-type="7432">7432 &nbsp;—&nbsp; OR</div>
@@ -26,12 +27,12 @@
             <div class="ic-drag" draggable="true" ondragstart="dragIC(event)" data-type="7486">7486 &nbsp;—&nbsp; XOR</div>
             <div class="ic-drag" draggable="true" ondragstart="dragIC(event)" data-type="74266">74266 — XNOR</div>
         </div>
+
         <div class="controls">
             <button id="saveProjectBtn" class="btn" style="background: #2c3e50; color: #fff; margin-bottom: 5px;">💾 Save Project</button>
             <select id="loadProjectSelect" class="btn" style="margin-bottom: 10px; background: var(--bg);">
                 <option value="">-- Load Project --</option>
             </select>
-
             <button id="netlistBtn" class="btn" style="background: var(--accent); color: #111; font-weight: bold; margin-bottom: 5px;">🔌 Connection List</button>
             <button id="toggleWiresBtn" class="btn">Hide Wires</button>
             <button id="clearWiresBtn" class="btn danger">Clear All Wires</button>
@@ -61,7 +62,15 @@
     <div class="io-section"><h3>OUTPUT LEDs</h3><div class="io-row" id="outputRow"></div></div>
 </div>
 
-<!-- Modal for Connection List -->
+<div id="aiModal" class="ai-modal">
+    <div class="ai-modal-content">
+        <button class="close-btn" onclick="document.getElementById('aiModal').style.display='none'">✕</button>
+        <h3 id="aiModalTitle">Analyzing...</h3>
+        <div id="aiModalBody"></div>
+        <button class="bottom-btn" onclick="document.getElementById('aiModal').style.display='none'">Close</button>
+    </div>
+</div>
+
 <div id="ttModal" class="ai-modal">
     <div class="ai-modal-content" style="max-width: 500px; max-height: 80vh; display: flex; flex-direction: column;">
         <button class="close-btn" onclick="document.getElementById('ttModal').style.display='none'">✕</button>

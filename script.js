@@ -1,4 +1,9 @@
 // ═══════════════════════════════════════════════════════════
+// 🔧 CONFIG
+// ═══════════════════════════════════════════════════════════
+const BACKEND_URL = "https://ic-trainer-backend.vercel.app/api/check-circuit"; 
+
+// ═══════════════════════════════════════════════════════════
 // 📦 STATE
 // ═══════════════════════════════════════════════════════════
 const state = {
@@ -411,52 +416,115 @@ function getPinId(node) {
     return '';
 }
 
-// AI Debugger Stub
-document.getElementById('checkCircuitBtn').addEventListener('click', () => {
-    alert("AI Debugger requires backend setup. Use the Connection List to verify your circuit!");
-    try {
-    const wiringData = state.wires.map(w => `${formatNode(w.from)} -> ${formatNode(w.to)}`).join('\n');
-    const icsData = Object.keys(state.ics).map(slot => `Slot ${slot}: ${state.ics[slot].type}`).join('\n');
+// ═══════════════════════════════════════════════════════════
+// 🧠 AI DEBUGGER
+// ═══════════════════════════════════════════════════════════
+document.getElementById('checkCircuitBtn').addEventListener('click', async () => {
+    const expr = document.getElementById('targetExpr').value.trim().toUpperCase();
+    if (!expr) return alert("Please enter a target expression first!");
+    if (state.wires.length === 0) return alert("Your board is empty!");
 
-    const systemPrompt = `You are a digital logic tutor. 
-    The user is trying to build: "${expr}".
-    They failed at input combination: ${errorFound.input} (A=${errorFound.input[0]}, B=${errorFound.input[1]}, C=${errorFound.input[2]}, etc.).
-    Expected Output: ${errorFound.expected}. Actual Output: ${errorFound.actual}.
-    
-    Here are the ICs they placed:\n${icsData}
-    Here are their wires:\n${wiringData}
-    
-    Explain exactly what they wired wrong to cause this specific failure. Keep it under 40 words.`;
+    // 🚨 SAFETY CHECK: Don't freeze if no LED is connected
+    const hasOutput = state.wires.some(w => w.from.type === 'led' || w.to.type === 'led');
+    if (!hasOutput) return alert("You must connect a wire to an Output LED before testing!");
 
-    // 🚨 YOUR VERCEL URL GOES HERE
-    const response = await fetch("https://ic-trainer-backend.vercel.app/api/check-circuit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ systemPrompt: systemPrompt })
-    });
+    const btn = document.getElementById('checkCircuitBtn');
+    const modal = document.getElementById('aiModal');
+    const title = document.getElementById('aiModalTitle');
+    const body = document.getElementById('aiModalBody');
 
-    const data = await response.json();
+    btn.textContent = "Testing...";
+    btn.disabled = true;
+    modal.style.display = 'flex';
+    title.textContent = "Running 256 Tests...";
+    title.style.color = "var(--accent)";
+    body.innerHTML = "The JS Engine is checking all input combinations...";
 
-    // Log to console so we can debug
-    console.log("Backend Response:", data);
+    let cleanExpr = expr.split('=').pop().trim(); 
+    cleanExpr = cleanExpr.replace(/\./g, ' && ')
+                         .replace(/\+/g, ' || ')
+                         .replace(/([A-H])(?=[A-H(])/g, '$1 && ')
+                         .replace(/([A-H])\(/g, '$1 && (');
 
-    if (data.error) {
-        body.innerHTML += `<br><br><span class='error-text'>Backend Error: ${data.error}</span>`;
-    } else {
-        const aiReply = data.choices[0].message.content;
-        body.innerHTML += `<br><br><div style="background:rgba(109,168,153,0.1); padding:10px; border-left:3px solid var(--accent); font-size:0.85rem;"><b>AI Tutor:</b> ${aiReply}</div>`;
+    let errorFound = null;
+
+    for (let i = 0; i < 256; i++) {
+        let binary = i.toString(2).padStart(8, '0'); 
         
-        state.wires.forEach(w => {
-            w.path.classList.add('error-flash');
-            setTimeout(() => w.path.classList.remove('error-flash'), 3000);
-        });
+        for(let v=0; v<8; v++) {
+            state.inputs[v+1] = parseInt(binary[v]);
+        }
+
+        solveCircuit(); 
+        const physicalOut = state.outputs[1]; 
+
+        let mathOut = 0;
+        try {
+            mathOut = new Function('A','B','C','D','E','F','G','H', `return (${cleanExpr}) ? 1 : 0;`)
+                      (state.inputs[1], state.inputs[2], state.inputs[3], state.inputs[4], state.inputs[5], state.inputs[6], state.inputs[7], state.inputs[8]);
+        } catch(e) {
+            title.textContent = "Syntax Error";
+            body.innerHTML = `<span class='error-text'>Invalid Expression. Use format like AB + C or A.B + C</span>`;
+            btn.textContent = "Check Wiring"; btn.disabled = false;
+            return;
+        }
+
+        if (physicalOut !== mathOut) {
+            errorFound = { input: binary, expected: mathOut, actual: physicalOut };
+            break; 
+        }
     }
 
-} catch (error) {
-    console.error("FETCH ERROR:", error);
-    body.innerHTML += `<br><br><span class='error-text'>Network Error: ${error.message}</span>`;
-} finally {
-    btn.textContent = "Check Wiring"; 
-    btn.disabled = false;
-}
+    if (!errorFound) {
+        title.textContent = "✅ Success!";
+        body.innerHTML = "<span class='success-text'>Your physical wiring perfectly matches the expression for all combinations!</span>";
+        btn.textContent = "Check Wiring"; 
+        btn.disabled = false;
+    } else {
+        title.textContent = "❌ Circuit Failed";
+        body.innerHTML = `<span class='error-text'>Your circuit failed at Inputs: ${errorFound.input}</span><br><br>
+        Asking AI Tutor to find the mistake...`;
+
+        try {
+            const wiringData = state.wires.map(w => `${formatNode(w.from)} -> ${formatNode(w.to)}`).join('\n');
+            const icsData = Object.keys(state.ics).map(slot => `Slot ${slot}: ${state.ics[slot].type}`).join('\n');
+
+            const systemPrompt = `You are a digital logic tutor. 
+            The user is trying to build: "${expr}".
+            They failed at input combination: ${errorFound.input} (A=${errorFound.input[0]}, B=${errorFound.input[1]}, C=${errorFound.input[2]}, etc.).
+            Expected Output: ${errorFound.expected}. Actual Output: ${errorFound.actual}.
+            
+            Here are the ICs they placed:\n${icsData}
+            Here are their wires:\n${wiringData}
+            
+            Explain exactly what they wired wrong to cause this specific failure. Keep it under 40 words.`;
+
+            const response = await fetch(BACKEND_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ systemPrompt: systemPrompt })
+            });
+
+            const data = await response.json();
+
+            if (data.error) {
+                body.innerHTML += `<br><br><span class='error-text'>Backend Error: ${data.error}</span>`;
+            } else {
+                const aiReply = data.choices[0].message.content;
+                body.innerHTML += `<br><br><div style="background:rgba(109,168,153,0.1); padding:10px; border-left:3px solid var(--accent); font-size:0.85rem;"><b>AI Tutor:</b> ${aiReply}</div>`;
+                
+                state.wires.forEach(w => {
+                    w.path.classList.add('error-flash');
+                    setTimeout(() => w.path.classList.remove('error-flash'), 3000);
+                });
+            }
+
+        } catch (error) {
+            console.error("FETCH ERROR:", error);
+            body.innerHTML += `<br><br><span class='error-text'>Network Error: ${error.message}</span>`;
+        } finally {
+            btn.textContent = "Check Wiring"; 
+            btn.disabled = false;
+        }
+    }
 });
