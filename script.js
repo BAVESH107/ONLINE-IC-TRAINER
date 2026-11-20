@@ -12,7 +12,8 @@ const state = {
     ics: {},
     wires: [],
     memory: {}, 
-    isReset: false
+    isReset: false,
+    lastClk: 0 // 👈 Used to track edge-triggering for the 7474
 };
 
 const gateDefinitions = {
@@ -23,7 +24,14 @@ const gateDefinitions = {
     '74266': [[3,1,2,'XNOR'], [6,4,5,'XNOR'], [8,9,10,'XNOR'], [11,12,13,'XNOR']],
     '7402':  [[1,2,3,'NOR'],  [4,5,6,'NOR'],  [10,8,9,'NOR'],  [13,11,12,'NOR']],
     '7404':  [[2,1,null,'NOT'],[4,3,null,'NOT'],[6,5,null,'NOT'],
-              [8,9,null,'NOT'],[10,11,null,'NOT'],[12,13,null,'NOT']]
+              [8,9,null,'NOT'],[10,11,null,'NOT'],[12,13,null,'NOT']],
+    // 7474: [Q output, D input, CLK input, PRESET, CLEAR]
+    // Using pinout: Gate 1: Q=5, D=2, CLK=3, PRE=1, CLR=4
+    //               Gate 2: Q=9, D=12, CLK=11, PRE=13, CLR=10
+    '7474':  [
+        [5, 2, 3, 'DFF', 1, 4], 
+        [9, 12, 11, 'DFF', 13, 10]
+    ]
 };
 
 let isDrawingWire = false, startNode = null, tempPath = null, draggedICType = null;
@@ -202,7 +210,7 @@ function drawPath(path, startRect, endRect) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// ⚡ THE SOLVER (FROM YOUR FRIENDS)
+// ⚡ THE SOLVER (Modified for 7474)
 // ═══════════════════════════════════════════════════════════
 function pinKey(source) {
     return `${source.type}|${source.slot || ''}|${source.pin || ''}|${source.id || ''}`;
@@ -237,15 +245,39 @@ function getAllGates() {
     Object.entries(state.ics).forEach(([slot, ic]) => {
         const definitions = gateDefinitions[ic.type];
         if (!definitions) return;
-        definitions.forEach(([out, a, b, operation]) => {
-            all.push({ slot: String(slot), type: ic.type, out, a, b, operation, key: pinKey({ type: 'ic', slot: String(slot), pin: String(out) }) });
+        definitions.forEach((def) => {
+            all.push({ 
+                slot: String(slot), 
+                type: ic.type, 
+                out: def[0], 
+                a: def[1], 
+                b: def[2], 
+                operation: def[3], 
+                pre: def[4], 
+                clr: def[5],
+                key: pinKey({ type: 'ic', slot: String(slot), pin: String(def[0]) }) 
+            });
         });
     });
     return all;
 }
 
-function calculateGate(operation, a, b) {
-    switch (operation) {
+function calculateGate(gate, a, b, preVal, clrVal, isRisingEdge, memVal) {
+    // Handle async preset and clear first (Active LOW for 7474)
+    if (clrVal === 0) return 0; 
+    if (preVal === 0) return 1; 
+
+    if (gate.operation === 'DFF') {
+        // D Flip-Flop: Only updates on rising edge of clock
+        if (isRisingEdge) {
+            return a;
+        } else {
+            return memVal; // Hold previous state
+        }
+    }
+
+    // Standard combinational logic
+    switch (gate.operation) {
         case 'AND': return a & b; case 'OR': return a | b; case 'NAND': return Number(!(a & b));
         case 'NOR': return Number(!(a | b)); case 'XOR': return a ^ b; case 'XNOR': return Number(a === b);
         case 'NOT': return Number(!a); default: return 0;
@@ -277,17 +309,31 @@ function solveCircuit() {
     }
 
     let stable = false, passes = 0;
+    const currentClk = state.inputs.clk;
+
     while (!stable && passes < 300) {
         stable = true; passes++;
         for (const gate of gates) {
             const a = getNetValue({ type: 'ic', slot: gate.slot, pin: String(gate.a) });
             const b = gate.b === null ? 0 : getNetValue({ type: 'ic', slot: gate.slot, pin: String(gate.b) });
-            const result = calculateGate(gate.operation, a, b);
+            
+            // For 7474
+            const preVal = gate.pre ? getNetValue({ type: 'ic', slot: gate.slot, pin: String(gate.pre) }) : 1;
+            const clrVal = gate.clr ? getNetValue({ type: 'ic', slot: gate.slot, pin: String(gate.clr) }) : 1;
+            
+            // Edge detection
+            const isRisingEdge = (gate.operation === 'DFF' && currentClk === 1 && state.lastClk === 0);
+
+            const result = calculateGate(gate, a, b, preVal, clrVal, isRisingEdge, gateValues[gate.key]);
+            
             if (gateValues[gate.key] !== result) { gateValues[gate.key] = result; stable = false; }
         }
     }
 
     gates.forEach(g => { state.memory[g.key] = gateValues[g.key]; });
+
+    // Update lastClk AFTER solving so the next solve knows if it was a rising edge
+    state.lastClk = currentClk;
 
     for (let i = 1; i <= 8; i++) {
         const ledSource = { type: 'led', id: String(i), slot: '', pin: '' };
@@ -424,7 +470,6 @@ document.getElementById('checkCircuitBtn').addEventListener('click', async () =>
     if (!expr) return alert("Please enter a target expression first!");
     if (state.wires.length === 0) return alert("Your board is empty!");
 
-    // 🚨 SAFETY CHECK: Don't freeze if no LED is connected
     const hasOutput = state.wires.some(w => w.from.type === 'led' || w.to.type === 'led');
     if (!hasOutput) return alert("You must connect a wire to an Output LED before testing!");
 
@@ -454,6 +499,10 @@ document.getElementById('checkCircuitBtn').addEventListener('click', async () =>
         for(let v=0; v<8; v++) {
             state.inputs[v+1] = parseInt(binary[v]);
         }
+
+        // Reset edge detection for truth table testing
+        state.lastClk = 1; 
+        state.inputs.clk = 0; 
 
         solveCircuit(); 
         const physicalOut = state.outputs[1]; 
